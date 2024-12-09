@@ -1,0 +1,5 @@
+aiohttp
+aiohttp_retry
+bs4
+tqdm
+tenacity
