@@ -10,11 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, stop_after_attempt, wait_exponential
 import itertools
 
-def clear_screen():
-    if os.name == 'nt':
-        _ = os.system('cls')
-    else:
-        _ = os.system('clear')
         
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
