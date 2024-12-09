@@ -1,12 +1,12 @@
+# main.py
+
 import argparse
 import asyncio
 from scraper import Scraper
 from downloader import Downloader
-import logging
+from logger import get_logger, clear_screen
 
-# Initialize logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 def parse_arguments():
     """Parse command line arguments."""
@@ -35,8 +35,11 @@ async def main():
     # Parse command-line arguments
     args = parse_arguments()
 
+    # Clear the terminal screen
+    clear_screen()
+
     # Step 1: Scrape video links and metadata from the provided URL
-    logger.info(f"Starting to scrape videos from {args.url}...")
+    logger.warning(f"Starting to scrape videos from {args.url}...")
     videos = await scrape_videos(args.url)
 
     if not videos:
@@ -49,8 +52,6 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        # Run the main function
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Script terminated by user.")
-      
