@@ -1,5 +1,9 @@
+requests
 aiohttp
-aiohttp_retry
 bs4
+aiohttp-proxy
+fake-useragent
+flask
 tqdm
 tenacity
+
