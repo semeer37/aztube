@@ -7,7 +7,7 @@ from scraper import Scraper
 # Initialize Flask app
 app = Flask(__name__)
 
-# HTML template for displaying videos
+# HTML Template for the web interface
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -39,20 +39,18 @@ HTML_TEMPLATE = """
 """
 
 async def fetch_videos(base_url: str):
-    """Fetch videos using Scraper."""
+    """Fetch videos using the Scraper."""
     async with Scraper(base_url) as scraper:
         videos = await scraper.scrape()
         return [video for video in videos if video]
 
+@app.route('/')
+async def index():
+    """Flask route to display videos."""
+    videos = await fetch_videos(app.config['BASE_URL'])
+    return render_template_string(HTML_TEMPLATE, videos=videos)
+
 def launch_browser(base_url: str):
-    """Launch a browser with scraped videos."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    videos = loop.run_until_complete(fetch_videos(base_url))
-
-    @app.route('/')
-    def index():
-        return render_template_string(HTML_TEMPLATE, videos=videos)
-
+    """Launch Flask app with the correct config."""
+    app.config['BASE_URL'] = base_url
     app.run(debug=True)
-  
