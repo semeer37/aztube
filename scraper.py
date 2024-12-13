@@ -9,13 +9,16 @@ import re
 import random
 from typing import List, Dict, Optional
 from logger import get_logger, clear_screen
-from pprint import pprint
+from fake_useragent import UserAgent
 
 # Initialize logger
 logger = get_logger(__name__)
 
-async def get_proxies() -> List[str]:
-    """Fetches a list of proxies from a free proxy provider."""
+PROXY_TEST_URL = "https://httpbin.org/ip"
+MAX_RETRIES = 3
+
+async def fetch_proxies() -> List[str]:
+    """Fetches proxies from a free proxy provider."""
     url = "https://free-proxy-list.net/"
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
@@ -28,6 +31,28 @@ async def get_proxies() -> List[str]:
             ]
     return proxies
 
+async def check_proxy(proxy: str) -> bool:
+    """Check if a proxy is working."""
+    connector = ProxyConnector.from_url(f"http://{proxy}")
+    headers = {"User-Agent": UserAgent().random}
+
+    async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
+        try:
+            async with session.get(PROXY_TEST_URL, timeout=5) as response:
+                if response.status == 200:
+                    logger.info(f"Proxy {proxy} is working.")
+                    return True
+        except Exception as e:
+            logger.error(f"Proxy {proxy} failed. Error: {e}")
+    return False
+
+async def get_working_proxies() -> List[str]:
+    """Fetch and validate working proxies."""
+    proxies = await fetch_proxies()
+    tasks = [check_proxy(proxy) for proxy in proxies]
+    results = await asyncio.gather(*tasks)
+    return [proxy for proxy, valid in zip(proxies, results) if valid]
+
 class Scraper:
     def __init__(self, base_url: str, use_proxy: bool = False):
         self.base_url = base_url
@@ -35,36 +60,50 @@ class Scraper:
         self.video_links: List[str] = []
         self.videos: List[Dict[str, str]] = []
         self.proxies: List[str] = []
+        self.current_proxy_index = 0
 
     async def __aenter__(self):
         if self.use_proxy:
-            self.proxies = await get_proxies()
-            logger.info(f"Loaded {len(self.proxies)} proxies.")
+            self.proxies = await get_working_proxies()
+            if not self.proxies:
+                logger.error("No working proxies found. Disabling proxy usage.")
+                self.use_proxy = False
+            else:
+                logger.info(f"Loaded {len(self.proxies)} working proxies.")
         self.session = aiohttp.ClientSession()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.session.close()
 
+    def get_next_proxy(self) -> Optional[str]:
+        if not self.proxies:
+            return None
+        proxy = self.proxies[self.current_proxy_index]
+        self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxies)
+        return proxy
+
     async def fetch_html(self, url: str) -> Optional[str]:
-        attempts = 3  # Retry attempts
-        for _ in range(attempts):
-            proxy = random.choice(self.proxies) if self.proxies and self.use_proxy else None
+        headers = {"User-Agent": UserAgent().random}
+
+        for attempt in range(MAX_RETRIES):
+            proxy = self.get_next_proxy() if self.use_proxy else None
             connector = ProxyConnector.from_url(f"http://{proxy}") if proxy else None
 
-            try:
-                async with aiohttp.ClientSession(connector=connector) as session:
+            async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
+                try:
                     async with session.get(url, timeout=10) as response:
                         response.raise_for_status()
+                        logger.info(f"Fetched {url} successfully.")
                         return await response.text()
-            except ClientError as e:
-                if proxy and self.use_proxy:
-                    logger.error(f"Proxy {proxy} failed. Removing from proxy pool.")
-                    self.proxies.remove(proxy)
-                else:
-                    logger.error(f"Request failed for {url}. Error: {e}")
+                except ClientError as e:
+                    logger.error(f"Request failed for {url} using proxy {proxy}. Error: {e}")
+                    if proxy and self.use_proxy:
+                        self.proxies.remove(proxy)
+                        logger.warning(f"Removed failed proxy {proxy} from the list.")
+                    await asyncio.sleep(random.uniform(1, 3))  # Random delay to prevent blocking
 
-        logger.error(f"Failed to fetch {url} after {attempts} attempts.")
+        logger.error(f"Failed to fetch {url} after {MAX_RETRIES} retries.")
         return None
 
     async def find_video_links(self) -> List[str]:
@@ -76,7 +115,6 @@ class Scraper:
         soup = BeautifulSoup(html_content, "html.parser")
         video_links = soup.find_all("a", class_="video animate-thumb tt show-clip")
         self.video_links = [link.get("href") for link in video_links]
-        pprint(self.video_links)
         return self.video_links
 
     async def extract_metadata(self, video_link: str) -> Optional[Dict[str, str]]:
@@ -93,7 +131,10 @@ class Scraper:
 
         playlist_content = playlist_regex.group(1)
         title_regex = re.search(r'title:\s*"(.*?)"', playlist_content)
-        sources_regex = re.findall(r'{\s*file:\s*"(.*?)",\s*label:\s*"(.*?)",\s*default:\s*"(true|false)"\s*}', playlist_content)
+        sources_regex = re.findall(
+            r'{\s*file:\s*"(.*?)",\s*label:\s*"(.*?)",\s*default:\s*"(true|false)"\s*}', 
+            playlist_content
+        )
 
         metadata = {
             "title": title_regex.group(1) if title_regex else "",
@@ -113,21 +154,4 @@ class Scraper:
         metadata_tasks = [self.extract_metadata(link) for link in self.video_links]
         self.videos = await asyncio.gather(*metadata_tasks)
         return self.videos
-
-# Example usage
-async def main():
-    base_url = "https://www.aznude.com/view/celeb/k/kerrycondon.html"
-    
-    # Toggle use_proxy to True if needed
-    async with Scraper(base_url, use_proxy=True) as scraper:
-        videos = await scraper.scrape()
-        logger.info("Scraping completed.")
-        for video in videos:
-            if video:
-                pprint(video)
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Script terminated by user.")
+                    
