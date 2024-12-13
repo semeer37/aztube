@@ -1,6 +1,5 @@
 # scraper.py
 
-import asyncio
 import aiohttp
 from aiohttp import ClientError
 from aiohttp_proxy import ProxyConnector
@@ -8,50 +7,14 @@ from bs4 import BeautifulSoup
 import re
 import random
 from typing import List, Dict, Optional
+from proxy import ProxyManager
 from logger import get_logger, clear_screen
 from fake_useragent import UserAgent
 
 # Initialize logger
 logger = get_logger(__name__)
 
-PROXY_TEST_URL = "https://httpbin.org/ip"
 MAX_RETRIES = 3
-
-async def fetch_proxies() -> List[str]:
-    """Fetches proxies from a free proxy provider."""
-    url = "https://free-proxy-list.net/"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            page = await response.text()
-            soup = BeautifulSoup(page, "html.parser")
-            table = soup.find("tbody")
-            proxies = [
-                f"{row.find_all('td')[0].text}:{row.find_all('td')[1].text}"
-                for row in table if row.find_all('td')[4].text == 'elite proxy'
-            ]
-    return proxies
-
-async def check_proxy(proxy: str) -> bool:
-    """Check if a proxy is working."""
-    connector = ProxyConnector.from_url(f"http://{proxy}")
-    headers = {"User-Agent": UserAgent().random}
-
-    async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
-        try:
-            async with session.get(PROXY_TEST_URL, timeout=5) as response:
-                if response.status == 200:
-                    logger.info(f"Proxy {proxy} is working.")
-                    return True
-        except Exception as e:
-            logger.error(f"Proxy {proxy} failed. Error: {e}")
-    return False
-
-async def get_working_proxies() -> List[str]:
-    """Fetch and validate working proxies."""
-    proxies = await fetch_proxies()
-    tasks = [check_proxy(proxy) for proxy in proxies]
-    results = await asyncio.gather(*tasks)
-    return [proxy for proxy, valid in zip(proxies, results) if valid]
 
 class Scraper:
     def __init__(self, base_url: str, use_proxy: bool = False):
@@ -64,9 +27,10 @@ class Scraper:
 
     async def __aenter__(self):
         if self.use_proxy:
-            self.proxies = await get_working_proxies()
+            logger.info("Fetching working proxies...")
+            self.proxies = ProxyManager.get_working_proxies()
             if not self.proxies:
-                logger.error("No working proxies found. Disabling proxy usage.")
+                logger.error("No working proxies found. Proceeding without proxy.")
                 self.use_proxy = False
             else:
                 logger.info(f"Loaded {len(self.proxies)} working proxies.")
@@ -77,6 +41,7 @@ class Scraper:
         await self.session.close()
 
     def get_next_proxy(self) -> Optional[str]:
+        """Rotate through proxies."""
         if not self.proxies:
             return None
         proxy = self.proxies[self.current_proxy_index]
@@ -84,6 +49,7 @@ class Scraper:
         return proxy
 
     async def fetch_html(self, url: str) -> Optional[str]:
+        """Fetch HTML content from the target URL."""
         headers = {"User-Agent": UserAgent().random}
 
         for attempt in range(MAX_RETRIES):
@@ -101,12 +67,11 @@ class Scraper:
                     if proxy and self.use_proxy:
                         self.proxies.remove(proxy)
                         logger.warning(f"Removed failed proxy {proxy} from the list.")
-                    await asyncio.sleep(random.uniform(1, 3))  # Random delay to prevent blocking
-
         logger.error(f"Failed to fetch {url} after {MAX_RETRIES} retries.")
         return None
 
     async def find_video_links(self) -> List[str]:
+        """Find video links on the target page."""
         html_content = await self.fetch_html(self.base_url)
         if not html_content:
             logger.warning(f"No HTML content found at {self.base_url}.")
@@ -118,6 +83,7 @@ class Scraper:
         return self.video_links
 
     async def extract_metadata(self, video_link: str) -> Optional[Dict[str, str]]:
+        """Extract metadata for a single video link."""
         url = f"https://www.aznude.com{video_link}"
         html_content = await self.fetch_html(url)
         if not html_content:
@@ -143,6 +109,7 @@ class Scraper:
         return metadata
 
     async def scrape(self) -> List[Dict[str, str]]:
+        """Perform the entire scraping process."""
         clear_screen()
         logger.info("Starting the scraping process...")
         self.video_links = await self.find_video_links()
@@ -154,4 +121,3 @@ class Scraper:
         metadata_tasks = [self.extract_metadata(link) for link in self.video_links]
         self.videos = await asyncio.gather(*metadata_tasks)
         return self.videos
-                    
