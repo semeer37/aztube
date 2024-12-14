@@ -4,6 +4,7 @@ bs4
 aiohttp-proxy
 fake-useragent
 flask
+flask[async]
 tqdm
 tenacity
 
